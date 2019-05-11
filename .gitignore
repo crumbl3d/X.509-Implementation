@@ -54,3 +54,6 @@ $RECYCLE.BIN/
 
 # Project libraries
 !lib/**/*.jar
+
+# Project files
+keystore.jks
