@@ -1,33 +1,62 @@
 package implementation;
 
-import code.*;
+import code.GuiException;
 import gui.Constants;
+import gui.GuiInterfaceV1;
 import org.bouncycastle.asn1.ASN1OctetString;
 import org.bouncycastle.asn1.x509.AuthorityKeyIdentifier;
+import org.bouncycastle.asn1.x509.ExtendedKeyUsage;
 import org.bouncycastle.asn1.x509.Extension;
+import org.bouncycastle.asn1.x509.GeneralName;
 import org.bouncycastle.cert.X509CertificateHolder;
+import org.bouncycastle.cert.X509v3CertificateBuilder;
 import org.bouncycastle.cert.jcajce.JcaX509CertificateHolder;
 import org.bouncycastle.jce.provider.BouncyCastleProvider;
 import org.bouncycastle.openssl.jcajce.JcaPEMWriter;
-import x509.v3.*;
+import x509.v3.CodeV3;
 
 import java.io.*;
-import java.nio.file.*;
+import java.math.BigInteger;
+import java.nio.file.Files;
+import java.nio.file.Paths;
 import java.security.*;
-import java.security.cert.*;
 import java.security.cert.Certificate;
+import java.security.cert.*;
 import java.security.interfaces.DSAPublicKey;
 import java.security.interfaces.ECPublicKey;
 import java.security.interfaces.RSAPublicKey;
-import java.util.*;
+import java.util.Enumeration;
 
+@SuppressWarnings("unused")
 public class MyCode extends CodeV3 {
 
     private KeyStore keystore;
 
+    private final boolean supportsDSA;
+    private final boolean supportsRSA;
+    private final boolean supportsEC;
+
     public MyCode(boolean[] algorithm_conf, boolean[] extensions_conf, boolean extensions_rules) throws GuiException {
         super(algorithm_conf, extensions_conf, extensions_rules);
-        CertificateHelper.addBouncyCastleProvider();
+        supportsDSA = algorithm_conf[0];
+        supportsRSA = algorithm_conf[1];
+        supportsEC = algorithm_conf[3];
+        Security.addProvider(new BouncyCastleProvider());
+    }
+
+    private boolean saveLocalKeystore(boolean report) {
+        try (FileOutputStream output = new FileOutputStream(Project.KEYSTORE_FILENAME)) {
+            keystore.store(output, Project.KEYSTORE_PASSWORD);
+            return true;
+        } catch (Exception e) {
+            if (report)
+                GuiInterfaceV1.reportError("Failed to save the local keystore!");
+            return false;
+        }
+    }
+
+    private void saveLocalKeystore() {
+        saveLocalKeystore(true);
     }
 
     @Override
@@ -39,28 +68,13 @@ public class MyCode extends CodeV3 {
             } catch (IOException e) {
                 keystore.load(null, Project.KEYSTORE_PASSWORD);
                 if (!saveLocalKeystore(false))
-                    access.reportError("Failed to load the local keystore!");
+                    GuiInterfaceV1.reportError("Failed to load the local keystore!");
             }
             return keystore.aliases();
         } catch (Exception e) {
-            access.reportError(e);
+            GuiInterfaceV1.reportError(e);
             return null;
         }
-    }
-
-    public boolean saveLocalKeystore(boolean report) {
-        try (FileOutputStream output = new FileOutputStream(Project.KEYSTORE_FILENAME)) {
-            keystore.store(output, Project.KEYSTORE_PASSWORD);
-            return true;
-        } catch (Exception e) {
-            if (report)
-                access.reportError("Failed to save the local keystore!");
-            return false;
-        }
-    }
-
-    public void saveLocalKeystore() {
-        saveLocalKeystore(true);
     }
 
     @Override
@@ -69,33 +83,61 @@ public class MyCode extends CodeV3 {
             Files.deleteIfExists(Paths.get(Project.KEYSTORE_FILENAME));
             loadLocalKeystore();
         } catch (IOException e) {
-            access.reportError("Failed to reset the local keystore!");
+            GuiInterfaceV1.reportError("Failed to reset the local keystore!");
         }
     }
 
-    // TODO: Fix this method!!!
     @Override
     public int loadKeypair(String keypair_name) {
         try {
             X509Certificate cert = (X509Certificate) keystore.getCertificate(keypair_name);
+
+            // --- Version panel ---
+            access.setVersion(cert.getVersion() - 1); // Certificate version
+
+            // --- Serial number panel ---
+            access.setSerialNumber(cert.getSerialNumber().toString()); // Serial number panel
+
+            // --- Validity panel ---
+            access.setNotBefore(cert.getNotBefore()); // Not before date
+            access.setNotAfter(cert.getNotAfter()); // Not after date
+
+            // --- Public key panel ---
+            PublicKey publicKey = cert.getPublicKey();
+            String algorithm = publicKey.getAlgorithm();
+
+            boolean validDSA = algorithm.equals("DSA") && supportsDSA,
+                    validRSA = algorithm.equals("RSA") && supportsRSA,
+                    validEC = algorithm.equals("EC") && supportsEC;
+
+            if (validDSA || validRSA || validEC) {
+                access.setPublicKeyAlgorithm(algorithm); // Public key algorithm
+                access.setPublicKeyDigestAlgorithm(cert.getSigAlgName()); // Signature algorithm
+                if (validDSA) // DSA
+                    access.setPublicKeyParameter(Integer.toString(((DSAPublicKey) publicKey).getParams().getP().bitLength()));
+                else if (validRSA) // RSA
+                    access.setPublicKeyParameter(Integer.toString(((RSAPublicKey) publicKey).getModulus().bitLength()));
+                else { // EC
+                    // not completely implemented, not necessary for this project
+                    access.setPublicKeyParameter("not implemented");
+                    access.setPublicKeyECCurve(((ECPublicKey) publicKey).getParams().getCurve().toString());
+                }
+            }
+
+            // --- Subject panel ---
+            access.setSubject(cert.getSubjectX500Principal().getName()); // Subject info
+            access.setSubjectSignatureAlgorithm(cert.getPublicKey().getAlgorithm()); // Public key algorithm
+
+            // --- Issuer panel ---
+            access.setIssuer(cert.getIssuerX500Principal().getName()); // Issuer info
+            access.setIssuerSignatureAlgorithm(CertificateHelper.getSignatureAlgorithm(cert)); // Signature algorithm
+
+            // --- Extensions panel ---
             X509CertificateHolder holder = new JcaX509CertificateHolder(cert);
-            access.setSubject(holder.getSubject().toString());
-            access.setIssuer(holder.getIssuer().toString());
-            access.setIssuerSignatureAlgorithm(cert.getSigAlgName());
-            access.setVersion(holder.getVersionNumber() - 1);
-            access.setSerialNumber(holder.getSerialNumber().toString());
-            access.setNotBefore(holder.getNotBefore());
-            access.setNotAfter(holder.getNotAfter());
-            String algorithm = cert.getPublicKey().getAlgorithm();
-            access.setPublicKeyAlgorithm(algorithm);
-            if (algorithm.equals("DSA"))
-                access.setPublicKeyParameter(Integer.toString(((DSAPublicKey) cert.getPublicKey()).getParams().getP().bitLength()));
-            else if (algorithm.equals("RSA"))
-                access.setPublicKeyParameter(Integer.toString(((RSAPublicKey) cert.getPublicKey()).getModulus().bitLength()));
-            else if (algorithm.equals("EC"))
-                access.setPublicKeyECCurve(((ECPublicKey) cert.getPublicKey()).getParams().getCurve().toString());
-            access.setPublicKeyDigestAlgorithm(cert.getSigAlgName());
+
+            // Authority key identifier
             Extension authorityKeyIdentifier = holder.getExtension(Extension.authorityKeyIdentifier);
+            access.setEnabledAuthorityKeyID(authorityKeyIdentifier != null);
             if (authorityKeyIdentifier != null) {
                 access.setCritical(Constants.AKID, authorityKeyIdentifier.isCritical());
                 byte[] akiValue = cert.getExtensionValue(Extension.authorityKeyIdentifier.getId());
@@ -104,50 +146,122 @@ public class MyCode extends CodeV3 {
                 if (aki != null) {
                     if (aki.getAuthorityCertSerialNumber() != null)
                         access.setAuthoritySerialNumber(aki.getAuthorityCertSerialNumber().toString());
-                    if (aki.getAuthorityCertIssuer() != null)
-                        access.setAuthorityIssuer(aki.getAuthorityCertIssuer().toString());
+                    if (aki.getAuthorityCertIssuer() != null) {
+                        StringBuilder sb = new StringBuilder();
+                        for (GeneralName gn : aki.getAuthorityCertIssuer().getNames())
+                            sb.append(gn.getName());
+                        access.setAuthorityIssuer(sb.toString());
+                    }
                     if (aki.getAuthorityCertSerialNumber() != null)
                         access.setAuthorityKeyID(aki.getAuthorityCertSerialNumber().toString());
                 }
             }
+
+            // Issuer alternative name
             Extension issuerAlternativeName = holder.getExtension(Extension.issuerAlternativeName);
             if (issuerAlternativeName != null) {
                 access.setCritical(Constants.IAN, issuerAlternativeName.isCritical());
                 access.setAlternativeName(Constants.IAN, issuerAlternativeName.toString());
             }
+
+            // Extended key usage
             Extension extendedKeyUsage = holder.getExtension(Extension.extendedKeyUsage);
             if (extendedKeyUsage != null) {
                 access.setCritical(Constants.EKU, extendedKeyUsage.isCritical());
-////            access.setExtendedKeyUsage(cert.getExtendedKeyUsage());
+                access.setExtendedKeyUsage(CertificateHelper.getGuiUsageVector(
+                        ExtendedKeyUsage.fromExtensions(holder.getExtensions())));
             }
-            boolean[] vector = cert.getKeyUsage();
-            if (vector == null)
-                return 0;
-            if (vector[5]) // keyCertSign
-                return 2;
-            // TODO: Check if certificate is signed or not?!? self-signed or something else?
-            return 0;
+
+            // Checking if certificate is valid
+            try {
+                cert.checkValidity();
+            } catch (CertificateNotYetValidException | CertificateExpiredException e) {
+                return 0; // Invalid certificate!
+            }
+
+            // Checking if certificate is self-signed
+            boolean selfSigned = false;
+            if (cert.getSubjectDN().equals(cert.getIssuerDN())) {
+                try {
+                    cert.verify(cert.getPublicKey(), BouncyCastleProvider.PROVIDER_NAME);
+                    selfSigned = true;
+                } catch (Exception e) {
+                    return 0;
+                }
+            }
+
+            // Checking if certificate is CA certificate
+            boolean[] keyUsageVector = cert.getKeyUsage();
+            if (keyUsageVector != null && keyUsageVector[5] || cert.getBasicConstraints() != -1)
+                return 2; // CA certificate
+            else if (!selfSigned)
+                return 1; // CA signed certificate
+            return 0; // Self-signed certificate
         } catch (KeyStoreException | CertificateEncodingException e) {
-            access.reportError(e);
+            GuiInterfaceV1.reportError(e);
             return -1;
         }
     }
 
     @Override
     public boolean saveKeypair(String keypair_name) {
-        if (!CertificateHelper.assertKeyPairParams(access))
-            return false; // bad params
+        if (access.getVersion() != Project.CERTIFICATE_VERSION) {
+            GuiInterfaceV1.reportError("Unsupported certificate version: " + (access.getVersion() + 1));
+            return false;
+        }
+        if (!access.getPublicKeyAlgorithm().equals(Project.PUBLIC_KEY_ALGORITHM)) {
+            GuiInterfaceV1.reportError("Unsupported public key algorithm: " + access.getPublicKeyAlgorithm());
+            return false;
+        }
+        if (!access.getPublicKeyDigestAlgorithm().equals(Project.DIGEST_ALGORITHM)) {
+            GuiInterfaceV1.reportError("Unsupported public key digest algorithm: " + access.getPublicKeyDigestAlgorithm());
+            return false;
+        }
+        boolean cond = false;
+        for (String param : Project.PUBLIC_KEY_SIZES) {
+            if (cond = param.equals(access.getPublicKeyParameter()))
+                break;
+        }
+        if (!cond) {
+            GuiInterfaceV1.reportError("Unsupported public key algorithm parameter: " + access.getPublicKeyParameter());
+            return false;
+        }
         int keySize = Integer.parseInt(access.getPublicKeyParameter());
         try {
             KeyPair pair = CertificateHelper.generateKeyPair(access.getPublicKeyAlgorithm(), keySize);
-            X509Certificate cert = CertificateHelper.generateSelfSignedCertificate(access, pair);
-            Certificate[] chain = new Certificate[1];
-            chain[0] = cert;
+
+            X509v3CertificateBuilder certBuilder = CertificateHelper.initCertificateBuilder(
+                    access.getSubject(), access.getSubject(), pair.getPublic(),
+                    new BigInteger(access.getSerialNumber()), access.getNotBefore(), access.getNotAfter());
+
+            if (access.getEnabledAuthorityKeyID())
+                CertificateHelper.addAuthorityKeyIdentifier(
+                        certBuilder, access.isCritical(Constants.AKID),
+                        pair.getPublic(), access.getSubject(), new BigInteger(access.getSerialNumber()));
+
+            if (access.getAlternativeName(Constants.IAN).length > 0)
+                CertificateHelper.addIssuerAlternativeName(
+                        certBuilder, access.isCritical(Constants.IAN), access.getAlternativeName(Constants.IAN));
+
+            boolean extendedKeyUsage = false;
+            for (boolean flag : access.getExtendedKeyUsage())
+                if (flag) {
+                    extendedKeyUsage = true;
+                    break;
+                }
+            if (extendedKeyUsage)
+                CertificateHelper.addExtendedKeyUsage(
+                        certBuilder, access.isCritical(Constants.EKU), access.getExtendedKeyUsage());
+
+            X509Certificate cert = CertificateHelper.generateSignedCertificate(
+                    certBuilder, access.getPublicKeyDigestAlgorithm(), pair.getPrivate());
+
+            Certificate[] chain = new Certificate[] {cert};
             keystore.setKeyEntry(keypair_name, pair.getPrivate(), Project.KEY_PASSWORD, chain);
             saveLocalKeystore();
             return true;
         } catch (Exception e) {
-            access.reportError(e);
+            GuiInterfaceV1.reportError(e);
             return false;
         }
     }
@@ -159,7 +273,7 @@ public class MyCode extends CodeV3 {
             saveLocalKeystore();
             return true;
         } catch (KeyStoreException e) {
-            access.reportError(e);
+            GuiInterfaceV1.reportError(e);
             return false;
         }
     }
@@ -171,7 +285,7 @@ public class MyCode extends CodeV3 {
             importStore.load(input, password.toCharArray());
             Enumeration<String> aliases = importStore.aliases();
             if (!aliases.hasMoreElements()) {
-                access.reportError("Selected keystore is empty!");
+                GuiInterfaceV1.reportError("Selected keystore is empty!");
                 return false;
             }
             String alias = aliases.nextElement();
@@ -180,7 +294,7 @@ public class MyCode extends CodeV3 {
             saveLocalKeystore();
             return true;
         } catch (Exception e) {
-            access.reportError(e);
+            GuiInterfaceV1.reportError(e);
             return false;
         }
     }
@@ -195,7 +309,7 @@ public class MyCode extends CodeV3 {
             exportStore.store(output, password.toCharArray());
             return true;
         } catch (Exception e) {
-            access.reportError(e);
+            GuiInterfaceV1.reportError(e);
             return false;
         }
     }
@@ -209,11 +323,12 @@ public class MyCode extends CodeV3 {
             saveLocalKeystore();
             return true;
         } catch (Exception e) {
-            access.reportError(e);
+            GuiInterfaceV1.reportError(e);
             return false;
         }
     }
 
+    // TODO: Finish this method!
     @Override
     public boolean exportCertificate(String file, String keypair_name, int encoding, int format) {
         try {
@@ -235,7 +350,7 @@ public class MyCode extends CodeV3 {
             }
             return true;
         } catch (Exception e) {
-            access.reportError(e);
+            GuiInterfaceV1.reportError(e);
             return false;
         }
     }
@@ -264,12 +379,10 @@ public class MyCode extends CodeV3 {
     public boolean canSign(String keypair_name) {
         try {
             X509Certificate cert = (X509Certificate) keystore.getCertificate(keypair_name);
-            boolean[] vector = cert.getKeyUsage();
-            if (vector == null)
-                return false;
-            return vector[5]; // keyCertSign
+            boolean[] keyUsageVector = cert.getKeyUsage(); // keyUsageVector[5] - keyCertSign
+            return keyUsageVector != null && keyUsageVector[5] || cert.getBasicConstraints() != -1;
         } catch (KeyStoreException e) {
-            access.reportError(e);
+            GuiInterfaceV1.reportError(e);
             return false;
         }
     }
@@ -280,7 +393,7 @@ public class MyCode extends CodeV3 {
             X509Certificate cert = (X509Certificate) keystore.getCertificate(keypair_name);
             return cert.getSubjectX500Principal().getName();
         } catch (KeyStoreException e) {
-            access.reportError(e);
+            GuiInterfaceV1.reportError(e);
             return null;
         }
     }
@@ -292,7 +405,7 @@ public class MyCode extends CodeV3 {
             System.out.println("requested algorithm: " + cert.getPublicKey().getAlgorithm());
             return cert.getPublicKey().getAlgorithm();
         } catch (KeyStoreException e) {
-            access.reportError(e);
+            GuiInterfaceV1.reportError(e);
             return null;
         }
     }
@@ -302,15 +415,17 @@ public class MyCode extends CodeV3 {
         try {
             X509Certificate cert = (X509Certificate) keystore.getCertificate(keypair_name);
             String algorithm = cert.getPublicKey().getAlgorithm();
-            if (algorithm.equals("DSA"))
-                return Integer.toString(((DSAPublicKey) cert.getPublicKey()).getParams().getP().bitLength());
-            else if (algorithm.equals("RSA"))
-                return Integer.toString(((RSAPublicKey) cert.getPublicKey()).getModulus().bitLength());
-            else if (algorithm.equals("EC"))
-                return ((ECPublicKey) cert.getPublicKey()).getParams().getCurve().toString();
+            switch (algorithm) {
+                case "DSA":
+                    return Integer.toString(((DSAPublicKey) cert.getPublicKey()).getParams().getP().bitLength());
+                case "RSA":
+                    return Integer.toString(((RSAPublicKey) cert.getPublicKey()).getModulus().bitLength());
+                case "EC":
+                    return ((ECPublicKey) cert.getPublicKey()).getParams().getCurve().toString();
+            }
             return null;
         } catch (KeyStoreException e) {
-            access.reportError(e);
+            GuiInterfaceV1.reportError(e);
             return null;
         }
     }
