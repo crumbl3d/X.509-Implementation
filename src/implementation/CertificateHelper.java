@@ -1,21 +1,32 @@
 package implementation;
 
+import org.bouncycastle.asn1.ASN1Encodable;
+import org.bouncycastle.asn1.ASN1Set;
+import org.bouncycastle.asn1.DERSequence;
+import org.bouncycastle.asn1.pkcs.Attribute;
 import org.bouncycastle.asn1.pkcs.PKCSObjectIdentifiers;
 import org.bouncycastle.asn1.x500.X500Name;
 import org.bouncycastle.asn1.x509.*;
 import org.bouncycastle.asn1.x9.X9ObjectIdentifiers;
 import org.bouncycastle.cert.CertIOException;
+import org.bouncycastle.cert.X509CertificateHolder;
 import org.bouncycastle.cert.X509v3CertificateBuilder;
 import org.bouncycastle.cert.jcajce.JcaX509CertificateConverter;
+import org.bouncycastle.cert.jcajce.JcaX509CertificateHolder;
 import org.bouncycastle.cert.jcajce.JcaX509ExtensionUtils;
 import org.bouncycastle.cert.jcajce.JcaX509v3CertificateBuilder;
 import org.bouncycastle.jce.provider.BouncyCastleProvider;
+import org.bouncycastle.operator.ContentSigner;
 import org.bouncycastle.operator.OperatorCreationException;
 import org.bouncycastle.operator.jcajce.JcaContentSignerBuilder;
+import org.bouncycastle.pkcs.PKCS10CertificationRequest;
+import org.bouncycastle.pkcs.PKCS10CertificationRequestBuilder;
+import org.bouncycastle.pkcs.jcajce.JcaPKCS10CertificationRequestBuilder;
 
 import javax.security.auth.x500.X500Principal;
 import java.math.BigInteger;
 import java.security.*;
+import java.security.cert.Certificate;
 import java.security.cert.CertificateEncodingException;
 import java.security.cert.CertificateException;
 import java.security.cert.X509Certificate;
@@ -117,9 +128,12 @@ class CertificateHelper {
             X509v3CertificateBuilder certBuilder, boolean isCritical, boolean[] guiUsageVector)
             throws CertIOException {
         ArrayList<KeyPurposeId> usage = new ArrayList<>();
-        if (guiUsageVector[0])
+        if (guiUsageVector[0]) {
             usage.add(KeyPurposeId.anyExtendedKeyUsage);
-        else {
+            // If the anyExtendedKeyUsage keyPurposeID is present, the extension SHOULD NOT be critical.
+            // ref: https://tools.ietf.org/html/rfc3280 @4.2.1.13
+            isCritical = false;
+        } else {
             if (guiUsageVector[1])
                 usage.add(KeyPurposeId.id_kp_serverAuth);
             if (guiUsageVector[2])
@@ -143,6 +157,49 @@ class CertificateHelper {
         return new JcaX509CertificateConverter().setProvider(BouncyCastleProvider.PROVIDER_NAME).getCertificate(
                 certBuilder.build(new JcaContentSignerBuilder(signatureAlgorithm).setProvider(
                         BouncyCastleProvider.PROVIDER_NAME).build(issuerPrivateKey)));
+    }
+
+    @SuppressWarnings("SameParameterValue")
+    static PKCS10CertificationRequest generateCSR(X509Certificate cert, PrivateKey privateKey, String algorithm)
+            throws CertificateEncodingException, OperatorCreationException {
+        X509CertificateHolder holder = new JcaX509CertificateHolder(cert);
+        ContentSigner signer = new JcaContentSignerBuilder(algorithm).build(privateKey);
+        PKCS10CertificationRequestBuilder requestBuilder = new JcaPKCS10CertificationRequestBuilder(cert.getSubjectX500Principal(), cert.getPublicKey());
+        if (holder.getExtensions() != null)
+            requestBuilder.addAttribute(PKCSObjectIdentifiers.pkcs_9_at_extensionRequest, holder.getExtensions());
+        return requestBuilder.build(signer);
+    }
+
+    @SuppressWarnings("unused")
+    static Extensions getExtensionsFromCSR(PKCS10CertificationRequest csr) {
+        for (Attribute attribute : csr.getAttributes(PKCSObjectIdentifiers.pkcs_9_at_extensionRequest)) {
+            ASN1Set attValue = attribute.getAttrValues();
+            if (attValue != null) {
+                ASN1Encodable extension = attValue.getObjectAt(0);
+                if (extension instanceof Extensions) {
+                    return (Extensions) extension;
+                } else if (extension instanceof DERSequence) {
+                    return Extensions.getInstance(extension);
+                }
+            }
+        }
+        return null;
+    }
+
+    static boolean selfSigned(X509Certificate cert) {
+        return signedBy(cert, cert);
+    }
+
+    static boolean signedBy(X509Certificate end, X509Certificate ca) {
+        if (!ca.getSubjectDN().equals(end.getIssuerDN())) {
+            return false;
+        }
+        try {
+            end.verify(ca.getPublicKey());
+            return true;
+        } catch (CertificateException | NoSuchAlgorithmException | InvalidKeyException | SignatureException | NoSuchProviderException e) {
+            return false;
+        }
     }
 
 //    private X509Certificate generateSignedCertificate(X509Certificate rootCert,
