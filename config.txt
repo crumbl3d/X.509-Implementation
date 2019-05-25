@@ -1,4 +1,6 @@
 DSA
+RSA
+EC
 authority key identifier
 issuer alternative name
 extended key usage
