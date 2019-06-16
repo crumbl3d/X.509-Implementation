@@ -234,8 +234,12 @@ public class MyCode extends CodeV3 {
     private boolean addAuthorityKeyIdentifier(X509v3CertificateBuilder certBuilder, PublicKey issuerPU,
                                               String issuerDN, BigInteger issuerSerialNumber) {
         if (access.getEnabledAuthorityKeyID()) {
+            if (access.isCritical(Constants.AKID)) {
+                GuiInterfaceV1.reportError("Authority Key Identifier MUST NOT be marked critical!");
+                return false;
+            }
             try {
-                certBuilder.addExtension(Extension.authorityKeyIdentifier, access.isCritical(Constants.AKID),
+                certBuilder.addExtension(Extension.authorityKeyIdentifier, false,
                         new JcaX509ExtensionUtils().createAuthorityKeyIdentifier(
                                 issuerPU, new X500Principal(issuerDN), issuerSerialNumber));
             } catch (NoSuchAlgorithmException | CertIOException e) {
@@ -248,8 +252,12 @@ public class MyCode extends CodeV3 {
 
     private boolean addAuthorityKeyIdentifier(X509v3CertificateBuilder certBuilder, X509Certificate issuer) {
         if (access.getEnabledAuthorityKeyID()) {
+            if (access.isCritical(Constants.AKID)) {
+                GuiInterfaceV1.reportError("Authority Key Identifier MUST NOT be marked critical!");
+                return false;
+            }
             try {
-                certBuilder.addExtension(Extension.authorityKeyIdentifier, access.isCritical(Constants.AKID),
+                certBuilder.addExtension(Extension.authorityKeyIdentifier, false,
                         new JcaX509ExtensionUtils().createAuthorityKeyIdentifier(issuer));
             } catch (NoSuchAlgorithmException | CertificateEncodingException | CertIOException e) {
                 GuiInterfaceV1.reportError("Failed to add authority key identifier!");
@@ -262,6 +270,9 @@ public class MyCode extends CodeV3 {
     @SuppressWarnings("BooleanMethodIsAlwaysInverted")
     private boolean addIssuerAlternativeName(X509v3CertificateBuilder certBuilder) {
         if (access.getAlternativeName(Constants.IAN).length > 0) {
+            if (access.isCritical(Constants.IAN)) {
+                GuiInterfaceV1.reportError("Issuer Alternative Name SHOULD NOT be marked critical!");
+            }
             try {
                 String[] ian_arr = access.getAlternativeName(Constants.IAN);
                 GeneralNamesBuilder namesBuilder = new GeneralNamesBuilder();
